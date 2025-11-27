@@ -1,0 +1,66 @@
+# ═══════════════════════════════════════════════════════════════
+# CODEOWNERS - Automatic PR Review Assignments
+# ═══════════════════════════════════════════════════════════════
+# Format: path/pattern @github-username @github-team
+# Free tier: Maximum 1 required reviewer per file pattern
+
+# ═══════════════════════════════════════════════════════════════
+# GLOBAL OWNERS (Wszystkie pliki domyślnie)
+# ═══════════════════════════════════════════════════════════════
+* @ZSEL-OPOLE/infrastructure-team
+
+# ═══════════════════════════════════════════════════════════════
+# NETWORK CONFIGURATION
+# ═══════════════════════════════════════════════════════════════
+configs/                           @ZSEL-OPOLE/network-team
+configs/*.rsc                      @ZSEL-OPOLE/network-team
+CONFIG-*.md                        @ZSEL-OPOLE/network-team
+NETWORK-*.md                       @ZSEL-OPOLE/network-team
+
+# ═══════════════════════════════════════════════════════════════
+# INFRASTRUCTURE AS CODE
+# ═══════════════════════════════════════════════════════════════
+*.tf                               @ZSEL-OPOLE/terraform-team
+*.tfvars                           @ZSEL-OPOLE/terraform-team
+terraform/                         @ZSEL-OPOLE/terraform-team
+
+# ═══════════════════════════════════════════════════════════════
+# SCRIPTS
+# ═══════════════════════════════════════════════════════════════
+scripts/                           @ZSEL-OPOLE/devops-team
+*.ps1                              @ZSEL-OPOLE/powershell-team
+*.py                               @ZSEL-OPOLE/python-team
+
+# ═══════════════════════════════════════════════════════════════
+# CI/CD PIPELINES
+# ═══════════════════════════════════════════════════════════════
+.github/workflows/                 @ZSEL-OPOLE/devops-team
+.github/actions/                   @ZSEL-OPOLE/devops-team
+
+# ═══════════════════════════════════════════════════════════════
+# SECURITY & COMPLIANCE
+# ═══════════════════════════════════════════════════════════════
+SECURITY.md                        @ZSEL-OPOLE/security-team
+.pre-commit-config.yaml            @ZSEL-OPOLE/security-team
+.secrets.baseline                  @ZSEL-OPOLE/security-team
+
+# ═══════════════════════════════════════════════════════════════
+# DOCUMENTATION
+# ═══════════════════════════════════════════════════════════════
+*.md                               @ZSEL-OPOLE/documentation-team
+docs/                              @ZSEL-OPOLE/documentation-team
+README.md                          @ZSEL-OPOLE/infrastructure-team
+
+# ═══════════════════════════════════════════════════════════════
+# KUBERNETES & GITOPS
+# ═══════════════════════════════════════════════════════════════
+gitops/                            @ZSEL-OPOLE/k8s-team
+apps/                              @ZSEL-OPOLE/k8s-team
+*.yaml                             @ZSEL-OPOLE/k8s-team
+
+# ═══════════════════════════════════════════════════════════════
+# ANSIBLE
+# ═══════════════════════════════════════════════════════════════
+playbooks/                         @ZSEL-OPOLE/ansible-team
+inventory/                         @ZSEL-OPOLE/ansible-team
+*.yml                              @ZSEL-OPOLE/ansible-team
