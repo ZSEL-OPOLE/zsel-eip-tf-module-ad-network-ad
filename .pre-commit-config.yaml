@@ -1,0 +1,208 @@
+# Pre-commit hooks configuration
+# Instalacja: pip install pre-commit && pre-commit install
+
+repos:
+  # ═══════════════════════════════════════════════════════════════
+  # GENERAL FILE CHECKS
+  # ═══════════════════════════════════════════════════════════════
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      # Prevent commits to main/develop
+      - id: no-commit-to-branch
+        args: ['--branch', 'main', '--branch', 'develop']
+
+      # File size check (max 10MB)
+      - id: check-added-large-files
+        args: ['--maxkb=10240']
+
+      # Syntax checks
+      - id: check-yaml
+        args: ['--allow-multiple-documents']
+      - id: check-json
+      - id: check-toml
+      - id: check-xml
+
+      # Merge conflict detection
+      - id: check-merge-conflict
+
+      # Case-sensitive filename conflicts
+      - id: check-case-conflict
+
+      # Symlink detection
+      - id: check-symlinks
+
+      # Executable scripts have shebang
+      - id: check-shebang-scripts-are-executable
+
+      # No unresolved merge conflicts
+      - id: check-merge-conflict
+
+      # Private key detection
+      - id: detect-private-key
+
+      # AWS credentials detection
+      - id: detect-aws-credentials
+        args: ['--allow-missing-credentials']
+
+      # Trailing whitespace
+      - id: trailing-whitespace
+        args: ['--markdown-linebreak-ext=md']
+
+      # End of file fixer
+      - id: end-of-file-fixer
+
+      # Mixed line endings
+      - id: mixed-line-ending
+        args: ['--fix=lf']
+
+  # ═══════════════════════════════════════════════════════════════
+  # SECRET SCANNING
+  # ═══════════════════════════════════════════════════════════════
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.4.0
+    hooks:
+      - id: detect-secrets
+        args: ['--baseline', '.secrets.baseline']
+        exclude: package.lock.json
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.1
+    hooks:
+      - id: gitleaks
+
+  # ═══════════════════════════════════════════════════════════════
+  # POWERSHELL
+  # ═══════════════════════════════════════════════════════════════
+  - repo: local
+    hooks:
+      - id: powershell-syntax
+        name: PowerShell Syntax Check
+        entry: pwsh -NoProfile -Command "Get-Content $args | ForEach-Object { [System.Management.Automation.PSParser]::Tokenize($_, [ref]$null) | Out-Null }"
+        language: system
+        files: \.(ps1|psm1|psd1)$
+
+      - id: powershell-scriptanalyzer
+        name: PSScriptAnalyzer
+        entry: pwsh -NoProfile -Command "Import-Module PSScriptAnalyzer; Invoke-ScriptAnalyzer -Path $args -Settings PSGallery -Severity Error"
+        language: system
+        files: \.(ps1|psm1|psd1)$
+
+      - id: powershell-no-plaintext-passwords
+        name: Check for Plaintext Passwords
+        entry: bash -c 'if grep -iE "(password|pwd|apikey|token)\s*=\s*['\''\"]((?!(\$|Get-|Read-|ConvertTo-)).)*[''\"]" "$@"; then exit 1; fi'
+        language: system
+        files: \.(ps1|psm1|psd1)$
+
+  # ═══════════════════════════════════════════════════════════════
+  # PYTHON
+  # ═══════════════════════════════════════════════════════════════
+  - repo: https://github.com/psf/black
+    rev: 23.12.1
+    hooks:
+      - id: black
+        language_version: python3.11
+
+  - repo: https://github.com/pycqa/flake8
+    rev: 7.0.0
+    hooks:
+      - id: flake8
+        args: ['--max-line-length=120', '--extend-ignore=E203,W503']
+
+  - repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args: ['--profile', 'black']
+
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.6
+    hooks:
+      - id: bandit
+        args: ['-ll', '-i']  # Low and medium severity
+
+  - repo: https://github.com/pycqa/pylint
+    rev: v3.0.3
+    hooks:
+      - id: pylint
+        args: ['--fail-under=7.0']
+
+  # ═══════════════════════════════════════════════════════════════
+  # TERRAFORM
+  # ═══════════════════════════════════════════════════════════════
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.86.0
+    hooks:
+      - id: terraform_fmt
+      - id: terraform_validate
+      - id: terraform_docs
+      - id: terraform_tflint
+        args:
+          - '--args=--config=__GIT_WORKING_DIR__/.tflint.hcl'
+      - id: terraform_checkov
+        args:
+          - --args=--quiet
+          - --args=--framework terraform
+
+  # ═══════════════════════════════════════════════════════════════
+  # YAML / JSON
+  # ═══════════════════════════════════════════════════════════════
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.33.0
+    hooks:
+      - id: yamllint
+        args: ['-c', '.yamllint.yml']
+
+  - repo: https://github.com/python-jsonschema/check-jsonschema
+    rev: 0.27.3
+    hooks:
+      - id: check-github-workflows
+      - id: check-github-actions
+
+  # ═══════════════════════════════════════════════════════════════
+  # MARKDOWN
+  # ═══════════════════════════════════════════════════════════════
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.38.0
+    hooks:
+      - id: markdownlint
+        args: ['--config', '.markdownlint.json']
+
+  # ═══════════════════════════════════════════════════════════════
+  # COMMIT MESSAGE
+  # ═══════════════════════════════════════════════════════════════
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v3.0.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args: []
+
+  # ═══════════════════════════════════════════════════════════════
+  # CUSTOM CHECKS
+  # ═══════════════════════════════════════════════════════════════
+  - repo: local
+    hooks:
+      - id: check-sensitive-files
+        name: Check for Sensitive Files
+        entry: bash -c 'if find . -name "*.pem" -o -name "*.key" -o -name "*.pfx" -o -name "*id_rsa*" -o -name ".env" | grep -q .; then echo "Sensitive files detected!"; exit 1; fi'
+        language: system
+        pass_filenames: false
+
+      - id: check-routeros-passwords
+        name: Check RouterOS Config Passwords
+        entry: bash -c 'if grep -iE "(password|pwd)=[^$]" configs/*.rsc 2>/dev/null; then echo "Plaintext password in RouterOS config!"; exit 1; fi'
+        language: system
+        files: \.rsc$
+
+      - id: check-ip-addresses
+        name: Check for Hardcoded Production IPs
+        entry: bash -c 'if grep -oE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" "$@" | grep -v "^192\.168\.\|^10\.\|^172\.(1[6-9]|2[0-9]|3[01])\.\|^127\.\|^0\.0\.0\.0\|^255\.255\." | head -1; then echo "Potential production IP detected!"; exit 1; fi'
+        language: system
+        files: \.(ps1|py|tf)$
+
+      - id: no-debug-code
+        name: Check for Debug Code
+        entry: bash -c 'if grep -iE "(console\.log|print\(|Write-Debug|debugger|pdb\.set_trace)" "$@"; then echo "Debug code detected!"; exit 1; fi'
+        language: system
+        files: \.(ps1|py|js|ts)$
