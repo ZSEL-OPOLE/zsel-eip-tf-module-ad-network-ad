@@ -1,0 +1,358 @@
+name: Security & Quality Checks
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    # Codzienne skanowanie o 2:00 UTC
+    - cron: '0 2 * * *'
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════
+  # SECRET SCANNING
+  # ═══════════════════════════════════════════════════════════════
+  secret-scanning:
+    name: Secret Detection
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for better detection
+
+      - name: TruffleHog Secret Scanner
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          extra_args: --only-verified
+
+        # GitLeaks requires a license for organization accounts
+        # Uncomment after obtaining license at gitleaks.io
+        # - name: GitLeaks Secret Scanner
+        #   uses: gitleaks/gitleaks-action@v2
+        #   env:
+        #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        #     GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+  # ═══════════════════════════════════════════════════════════════
+  # POWERSHELL SECURITY
+  # ═══════════════════════════════════════════════════════════════
+  powershell-security:
+    name: PowerShell Security Analysis
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
+
+          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Settings PSGallery -Severity Error,Warning
+
+          if ($results.Count -gt 0) {
+            Write-Host "::error::Found $($results.Count) PSScriptAnalyzer issues"
+            $results | Format-Table -AutoSize
+            exit 1
+          }
+
+          Write-Host "✓ No PSScriptAnalyzer issues found"
+
+      - name: Check for Hardcoded Credentials
+        shell: pwsh
+        run: |
+          $patterns = @(
+            'Password\s*=\s*[''"][^''"]+[''"]',
+            'pwd\s*=\s*[''"][^''"]+[''"]',
+            'SecureString\s*=\s*[''"][^''"]+[''"]',
+            'API[_-]?KEY\s*=\s*[''"][^''"]+[''"]',
+            'TOKEN\s*=\s*[''"][^''"]+[''"]'
+          )
+
+          $found = $false
+          Get-ChildItem -Path . -Include *.ps1,*.psm1,*.psd1 -Recurse | ForEach-Object {
+            $content = Get-Content $_.FullName -Raw
+            foreach ($pattern in $patterns) {
+              if ($content -match $pattern) {
+                Write-Host "::error file=$($_.FullName)::Found potential hardcoded credential: $pattern"
+                $found = $true
+              }
+            }
+          }
+
+          if ($found) {
+            exit 1
+          }
+
+          Write-Host "✓ No hardcoded credentials found"
+
+  # ═══════════════════════════════════════════════════════════════
+  # PYTHON SECURITY
+  # ═══════════════════════════════════════════════════════════════
+  python-security:
+    name: Python Security Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check if Python files exist
+        id: check_python
+        run: |
+          if find . -name "*.py" -not -path "*/venv/*" -not -path "*/.venv/*" | grep -q .; then
+            echo "has_python=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_python=false" >> $GITHUB_OUTPUT
+            echo "ℹ️ No Python files found - skipping Python security checks"
+          fi
+
+      - name: Set up Python
+        if: steps.check_python.outputs.has_python == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install security tools
+        if: steps.check_python.outputs.has_python == 'true'
+        run: |
+          pip install bandit safety pylint black flake8
+
+      - name: Bandit Security Scanner
+        if: steps.check_python.outputs.has_python == 'true'
+        run: |
+          bandit -r . -f json -o bandit-report.json || true
+          bandit -r . -ll  # Medium and high severity only
+        continue-on-error: false
+
+      - name: Safety - Check Dependencies
+        if: steps.check_python.outputs.has_python == 'true'
+        run: |
+          pip freeze > requirements-temp.txt
+          safety check --file requirements-temp.txt --json || true
+          safety check --file requirements-temp.txt
+        continue-on-error: true
+
+      - name: Pylint Code Quality
+        if: steps.check_python.outputs.has_python == 'true'
+        run: |
+          find . -name "*.py" -not -path "*/venv/*" | xargs pylint --fail-under=7.0
+        continue-on-error: true
+
+  # ═══════════════════════════════════════════════════════════════
+  # TERRAFORM SECURITY
+  # ═══════════════════════════════════════════════════════════════
+  terraform-security:
+    name: Terraform Security Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check if Terraform files exist
+        id: check_terraform
+        run: |
+          if find . -name "*.tf" -not -path "*/.terraform/*" | grep -q .; then
+            echo "has_terraform=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_terraform=false" >> $GITHUB_OUTPUT
+            echo "ℹ️ No Terraform files found - skipping Terraform checks"
+          fi
+
+      - name: Setup Terraform
+        if: steps.check_terraform.outputs.has_terraform == 'true'
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.0
+
+      - name: Terraform Format Check
+        if: steps.check_terraform.outputs.has_terraform == 'true'
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+
+      - name: TFLint
+        if: steps.check_terraform.outputs.has_terraform == 'true'
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+
+      - name: Run TFLint
+        if: steps.check_terraform.outputs.has_terraform == 'true'
+        run: |
+          find . -name "*.tf" -not -path "*/\.*" | xargs -I {} dirname {} | sort -u | while read dir; do
+            echo "Checking $dir"
+            cd "$dir" && tflint --init && tflint
+          done
+        continue-on-error: true
+
+      - name: Checkov Security Scanner
+        if: steps.check_terraform.outputs.has_terraform == 'true'
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: .
+          framework: terraform
+          quiet: false
+          soft_fail: true
+
+      - name: TFSec Security Scanner
+        if: steps.check_terraform.outputs.has_terraform == 'true'
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          soft_fail: true
+
+  # ═══════════════════════════════════════════════════════════════
+  # YAML/JSON VALIDATION
+  # ═══════════════════════════════════════════════════════════════
+  yaml-json-validation:
+    name: YAML/JSON Syntax Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate YAML files
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yamllint
+
+          find . -name "*.yml" -o -name "*.yaml" | while read file; do
+            echo "Validating $file"
+            yamllint -c .yamllint.yml "$file"
+          done
+
+      - name: Validate JSON files
+        run: |
+          find . -name "*.json" | while read file; do
+            echo "Validating $file"
+            python -m json.tool "$file" > /dev/null || exit 1
+          done
+
+  # ═══════════════════════════════════════════════════════════════
+  # MARKDOWN LINTING
+  # ═══════════════════════════════════════════════════════════════
+  markdown-linting:
+    name: Markdown Quality Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Markdownlint
+        uses: articulate/actions-markdownlint@v1
+        with:
+          config: .markdownlint.json
+          files: '**/*.md'
+          ignore: node_modules
+        continue-on-error: true
+
+      - name: Check for broken links
+        uses: gaurav-nelson/github-action-markdown-link-check@v1
+        with:
+          use-quiet-mode: 'yes'
+          config-file: '.markdown-link-check.json'
+        continue-on-error: true
+
+  # ═══════════════════════════════════════════════════════════════
+  # DEPENDENCY REVIEW
+  # ═══════════════════════════════════════════════════════════════
+  dependency-review:
+    name: Dependency Security Review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: moderate
+          deny-licenses: GPL-2.0, GPL-3.0
+
+  # ═══════════════════════════════════════════════════════════════
+  # FILE SIZE & SENSITIVE FILES CHECK
+  # ═══════════════════════════════════════════════════════════════
+  file-checks:
+    name: File Size & Sensitive Files Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for large files
+        run: |
+          MAX_SIZE=10485760  # 10MB
+
+          large_files=$(find . -type f -size +10M -not -path "*/.git/*" -not -path "*/node_modules/*" 2>/dev/null || true)
+          
+          if [ -n "$large_files" ]; then
+            echo "::warning::Large files found (excluding .git and node_modules):"
+            echo "$large_files" | while read file; do
+              size=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file")
+              echo "::warning file=$file::File size: $size bytes"
+            done
+          else
+            echo "✓ No large files found (excluding .git and node_modules)"
+          fi
+
+      - name: Check for sensitive files
+        run: |
+          SENSITIVE_PATTERNS=(
+            "*.pem"
+            "*.key"
+            "*.pfx"
+            "*.p12"
+            "*id_rsa*"
+            "*id_dsa*"
+            "*.asc"
+            "*.gpg"
+            ".env"
+            ".env.local"
+            ".env.production"
+          )
+
+          found=false
+          for pattern in "${SENSITIVE_PATTERNS[@]}"; do
+            if find . -name "$pattern" | grep -q .; then
+              echo "::error::Found sensitive file pattern: $pattern"
+              find . -name "$pattern"
+              found=true
+            fi
+          done
+
+          if ["$found" = true]; then
+            exit 1
+          fi
+
+          echo "✓ No sensitive files found"
+
+  # ═══════════════════════════════════════════════════════════════
+  # CODE QUALITY REPORT
+  # ═══════════════════════════════════════════════════════════════
+  quality-report:
+    name: Generate Quality Report
+    runs-on: ubuntu-latest
+    needs: [secret-scanning, powershell-security, python-security, terraform-security, yaml-json-validation]
+    if: always()
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Generate Quality Badge
+        run: |
+          echo "## Security & Quality Check Results" > $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Secret Scanning | ${{ needs.secret-scanning.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| PowerShell Security | ${{ needs.powershell-security.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Python Security | ${{ needs.python-security.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Terraform Security | ${{ needs.terraform-security.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| YAML/JSON Validation | ${{ needs.yaml-json-validation.result }} |" >> $GITHUB_STEP_SUMMARY

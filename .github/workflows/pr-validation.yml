@@ -1,0 +1,334 @@
+name: Pull Request Validation
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main, develop]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════
+  # PR METADATA VALIDATION
+  # ═══════════════════════════════════════════════════════════════
+  pr-validation:
+    name: PR Metadata & Rules Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR Title Convention
+        uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            docs
+            style
+            refactor
+            perf
+            test
+            build
+            ci
+            chore
+            revert
+          requireScope: false
+          subjectPattern: ^(?![A-Z]).+$
+          subjectPatternError: |
+            The subject "{subject}" found in the pull request title "{title}"
+            didn't match the configured pattern. Please ensure that the subject
+            doesn't start with an uppercase character.
+
+      - name: Check PR Description
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+
+            if (!pr.body || pr.body.length < 50) {
+              core.setFailed('PR description must be at least 50 characters long');
+            }
+
+            // Check for required sections
+            const requiredSections = ['## Description', '## Changes', '## Testing'];
+            const missingSection = requiredSections.find(section => !pr.body.includes(section));
+
+            if (missingSection) {
+              core.setFailed(`PR description is missing required section: ${missingSection}`);
+            }
+
+      - name: Check for linked issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const issuePattern = /(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#\d+/i;
+
+            if (!issuePattern.test(pr.body)) {
+              core.warning('PR should reference an issue using "Closes #123" or "Fixes #123"');
+            }
+
+  # ═══════════════════════════════════════════════════════════════
+  # CODE CHANGES VALIDATION
+  # ═══════════════════════════════════════════════════════════════
+  changes-validation:
+    name: Code Changes Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check file count
+        run: |
+          FILE_COUNT=$(git diff --name-only origin/${{ github.base_ref }}...HEAD | wc -l)
+
+          if [ $FILE_COUNT -gt 50 ]; then
+            echo "::error::PR modifies $FILE_COUNT files (max 50). Consider splitting into smaller PRs."
+            exit 1
+          fi
+
+          echo "✓ PR modifies $FILE_COUNT files (within limit)"
+
+      - name: Check line changes
+        run: |
+          LINES_ADDED=$(git diff --numstat origin/${{ github.base_ref }}...HEAD | awk '{sum+=$1} END {print sum}')
+          LINES_DELETED=$(git diff --numstat origin/${{ github.base_ref }}...HEAD | awk '{sum+=$2} END {print sum}')
+          TOTAL_CHANGES=$((LINES_ADDED + LINES_DELETED))
+
+          if [ $TOTAL_CHANGES -gt 1000 ]; then
+            echo "::warning::PR has $TOTAL_CHANGES line changes (recommended max 1000)"
+          fi
+
+          echo "✓ PR has $TOTAL_CHANGES line changes"
+
+      - name: Detect potential conflicts
+        run: |
+          git fetch origin ${{ github.base_ref }}
+
+          if ! git merge-tree $(git merge-base HEAD origin/${{ github.base_ref }}) HEAD origin/${{ github.base_ref }} | grep -q "<<<<<"; then
+            echo "✓ No merge conflicts detected"
+          else
+            echo "::error::Potential merge conflicts detected"
+            exit 1
+          fi
+
+  # ═══════════════════════════════════════════════════════════════
+  # COMMIT VALIDATION
+  # ═══════════════════════════════════════════════════════════════
+  commit-validation:
+    name: Commit History Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate commit messages
+        run: |
+          git log origin/${{ github.base_ref }}..HEAD --pretty=format:"%s" | while read msg; do
+            # Check minimum length
+            if [ ${#msg} -lt 10 ]; then
+              echo "::error::Commit message too short: '$msg'"
+              exit 1
+            fi
+
+            # Check for WIP commits
+            if echo "$msg" | grep -iq "wip\|work in progress\|temp\|temporary"; then
+              echo "::error::WIP commit detected: '$msg'. Squash before merging."
+              exit 1
+            fi
+
+            # Check for merge commits (except on develop)
+            if echo "$msg" | grep -q "^Merge branch"; then
+              echo "::error::Merge commit detected: '$msg'. Use rebase workflow."
+              exit 1
+            fi
+          done
+
+          echo "✓ All commit messages are valid"
+
+      - name: Check for signed commits
+        run: |
+          UNSIGNED=$(git log origin/${{ github.base_ref }}..HEAD --pretty=format:"%G?" | grep -v "G" | wc -l)
+
+          if [ $UNSIGNED -gt 0 ]; then
+            echo "::warning::Found $UNSIGNED unsigned commits. Consider signing commits with GPG."
+          else
+            echo "✓ All commits are signed"
+          fi
+
+  # ═══════════════════════════════════════════════════════════════
+  # DOCUMENTATION VALIDATION
+  # ═══════════════════════════════════════════════════════════════
+  documentation-validation:
+    name: Documentation Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for documentation updates
+        run: |
+          CODE_CHANGES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -E '\.(ps1|py|tf)$' | wc -l)
+          DOC_CHANGES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -E '\.md$' | wc -l)
+
+          if [ $CODE_CHANGES -gt 5 ] && [ $DOC_CHANGES -eq 0 ]; then
+            echo "::warning::PR modifies $CODE_CHANGES code files but no documentation. Consider updating docs."
+          else
+            echo "✓ Documentation changes detected or minimal code changes"
+          fi
+
+      - name: Check for TODO/FIXME comments
+        run: |
+          NEW_TODOS=$(git diff origin/${{ github.base_ref }}...HEAD | grep -E '^\+.*\b(TODO|FIXME|XXX|HACK)\b' | wc -l)
+
+          if [ $NEW_TODOS -gt 0 ]; then
+            echo "::warning::PR adds $NEW_TODOS new TODO/FIXME comments"
+            git diff origin/${{ github.base_ref }}...HEAD | grep -E '^\+.*\b(TODO|FIXME|XXX|HACK)\b'
+          fi
+
+  # ═══════════════════════════════════════════════════════════════
+  # AUTOMATED TESTS
+  # ═══════════════════════════════════════════════════════════════
+  automated-tests:
+    name: Run Automated Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run PowerShell tests (if exist)
+        shell: pwsh
+        run: |
+          if (Test-Path "tests/*.Tests.ps1") {
+            Install-Module -Name Pester -Force -Scope CurrentUser
+            Invoke-Pester -Path tests -OutputFormat NUnitXml -OutputFile test-results.xml
+          } else {
+            Write-Host "No PowerShell tests found"
+          }
+
+      - name: Run Python tests (if exist)
+        run: |
+          if [ -f "requirements-dev.txt" ]; then
+            pip install -r requirements-dev.txt
+            pytest tests/ --junitxml=pytest-results.xml || true
+          else
+            echo "No Python tests found"
+          fi
+
+  # ═══════════════════════════════════════════════════════════════
+  # LABEL AUTOMATION
+  # ═══════════════════════════════════════════════════════════════
+  auto-label:
+    name: Auto-label PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply labels based on changes
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const files = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number
+            });
+
+            const labels = [];
+
+            // Language labels
+            const fileExtensions = files.data.map(f => f.filename.split('.').pop());
+            const extChecks = [
+              {exts: ['ps1', 'psm1', 'psd1'], label: 'powershell'},
+              {exts: ['py'], label: 'python'},
+              {exts: ['tf', 'tfvars'], label: 'terraform'},
+              {exts: ['yml', 'yaml'], label: 'yaml'},
+              {exts: ['md'], label: 'documentation'}
+            ];
+            extChecks.forEach(({exts, label}) => {
+              if (fileExtensions.some(ext => exts.includes(ext))) labels.push(label);
+            });
+
+            // Path labels
+            const paths = files.data.map(f => f.filename);
+            if (paths.some(p => p.startsWith('configs/'))) labels.push('network-config');
+            if (paths.some(p => p.startsWith('scripts/'))) labels.push('scripts');
+            if (paths.some(p => p.startsWith('.github/'))) labels.push('ci/cd');
+
+            // Size label
+            const additions = files.data.reduce((sum, f) => sum + f.additions, 0);
+            const deletions = files.data.reduce((sum, f) => sum + f.deletions, 0);
+            const totalChanges = additions + deletions;
+
+            if (totalChanges < 50) labels.push('size/XS');
+            else if (totalChanges < 200) labels.push('size/S');
+            else if (totalChanges < 500) labels.push('size/M');
+            else if (totalChanges < 1000) labels.push('size/L');
+            else labels.push('size/XL');
+
+            // Apply labels
+            if (labels.length > 0) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                labels: labels
+              });
+            }
+
+  # ═══════════════════════════════════════════════════════════════
+  # PR COMMENT WITH CHECKLIST
+  # ═══════════════════════════════════════════════════════════════
+  pr-checklist:
+    name: Post PR Checklist
+    runs-on: ubuntu-latest
+    if: github.event.action == 'opened'
+    steps:
+      - name: Post checklist comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = `## 📋 PR Review Checklist
+
+            **Before merging, ensure:**
+
+            - [ ] Code follows project style guidelines
+            - [ ] All tests pass locally
+            - [ ] Documentation is updated (if needed)
+            - [ ] No sensitive data (passwords, keys, tokens) in code
+            - [ ] Commit messages follow convention
+            - [ ] PR description explains changes clearly
+            - [ ] Breaking changes are documented
+            - [ ] Performance impact assessed
+            - [ ] Security implications considered
+
+            **For Reviewers:**
+
+            - [ ] Code logic is sound
+            - [ ] No code smells or anti-patterns
+            - [ ] Security vulnerabilities addressed
+            - [ ] Test coverage is adequate
+            - [ ] Documentation is clear and complete
+
+            ---
+            🤖 *This checklist was automatically generated*`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: body
+            });
